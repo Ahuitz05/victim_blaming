@@ -1,5 +1,3 @@
-from doctest import master
-from unicodedata import name
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
@@ -9,34 +7,67 @@ from selenium.webdriver.common.by import By
 
 import pandas as pd
 import time
+from bs4 import BeautifulSoup
 
 # Constants
-
 URL = "https://pnmi.segob.gob.mx/reporte/"
-TAB_NAMES = ['Información sobre el medio impreso', 'Información adicional sobre el medio impreso', 'Circulación y distribución geográfica'] # website is poorly labeled so names are needed
+TAB_NAMES = ['Información sobre el medio impreso', 'Circulación y distribución geográfica', 'Perfil del lector'] # website is poorly labeled so names are needed
+TAB_PREFIX = ['info', 'circulacion', 'perfil']
+
+def circulacion_collector():
+    title = driver.find_element(By.TAG_NAME, "h3").text
+    html = driver.page_source
+    soup = BeautifulSoup(html, features="lxml")
+    table = soup.find_all("table")[1]
+    df = pd.read_html(str(table))[0]
+    df.insert(0, 'periodico', title)
+    return df
+
+
+def table_collector():
+    rows = driver.find_elements(By.TAG_NAME, "td")
+    columns = []
+    values = []
+    rows = [i for i in rows if i.text != '']
+    for row in range(len(rows)):
+        if row % 2 == 0:
+            columns.append(rows[row].text)
+        else:
+            values.append(rows[row].text)
+    
+    zip_iterator = zip(columns, values)
+    k_v = dict(zip_iterator)
+
+    return k_v
+
 
 
 def data_collector():
     """
-    1 - if dataframe does not exist initializes it with colnames
-    2 - collects all data and puts it in a list
-    3 - remove colnames
-    4 - check that list length = df length
-    5 - appends list to df
+    Returns a dataframe with all the information found in paragraphs and tables
     """
     data = {}
-    for i in TAB_NAMES:
-        driver.find_element(by=By.XPATH, value=f"//a[text()='{i}']").click()
+    for tab, pref in zip(TAB_NAMES, TAB_PREFIX):
+        driver.find_element(by=By.XPATH, value=f"//a[text()='{tab}']").click()
         datos = driver.find_elements(By.TAG_NAME, "p")
 
         for val in range(len(datos)):
             if datos[val].text != '':
                 if len(datos[val].text.split(': ')) == 2:
-                    k_v = dict([datos[val].text.split(': ')])
+                    values = datos[val].text.split(': ')
+                    colname, value = values[0], values[1]
+                    colname = pref + '_' + colname
+                    k_v = dict([[colname, value]])
                     data.update(k_v)
+        
+        if pref == 'circulacion':
+             circulacion = circulacion_collector()
+        if pref == 'perfil':
+            data.update(table_collector())
+
 
     df = pd.DataFrame([data], columns=data.keys())
-    return df
+    return df, circulacion
 
 
 
@@ -61,22 +92,26 @@ def get_data_sys(driver):
         while True:
             try:
                 if retry_counter <= 3:
-                    master_data = master_data.append(data_collector())
+                    master_data_new, circulacion_new = data_collector()
+                    master_data = pd.concat([master_data, master_data_new])
+                    circulacion = pd.concat([circulacion, circulacion_new])
+                    
                     print(master_data)
+                    print(circulacion)
                     break
             except:
-                time.sleep(2)
                 retry_counter += 1
                 if retry_counter > 3:
-                    master_data = data_collector()
+                    master_data, circulacion = data_collector()
                     print(master_data)
+                    print(circulacion)
                     break
                 print(f"retrying. Attempt: {retry_counter}")
                 continue
         
         # go back
         driver.find_element(by=By.CLASS_NAME, value="regresar").click()
-    return master_data
+    return master_data, circulacion
 
 
 # Chrome driver setup
@@ -89,6 +124,7 @@ chromeOptions.headless = False
 s = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=s, options=chromeOptions)
 
-master_data = get_data_sys(driver)
+master_data, circulacion = get_data_sys(driver)
 master_data.to_csv('newspaper_data.csv', index=False)
+circulacion.to_csv('circulacion.csv', index=False)
 
