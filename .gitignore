@@ -1,3 +1,4 @@
 /env
 /mexico_news_postgres_data
 docker_commands
+/docker_sql
